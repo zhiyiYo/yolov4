@@ -1,7 +1,17 @@
 # coding:utf-8
+import os
+from pathlib import Path
+from typing import List, Union
+
+import numpy as np
 import torch
+from PIL import Image
 from torch import nn
 from torch.nn import functional as F
+from utils.augmentation_utils import ToTensor
+from utils.box_utils import draw, rescale_bbox
+
+from .detector import Detector
 
 
 class Mish(nn.Module):
@@ -155,6 +165,16 @@ class CSPDarkNet(nn.Module):
 
         return x3, x4, x5
 
+    def load(self, model_path: Union[Path, str]):
+        """ 载入模型
+
+        Parameters
+        ----------
+        model_path: str or Path
+            模型文件路径
+        """
+        self.load_state_dict(torch.load(model_path))
+
 
 class CBLBlock(nn.Module):
     """ CBL 块 """
@@ -236,8 +256,42 @@ def make_yolo_head(channels: list):
 class Yolo(nn.Module):
     """ Yolov4 神经网络 """
 
-    def __init__(self, n_classes):
+    def __init__(self, n_classes, image_size=416, anchors: list = None, conf_thresh=0.1, nms_thresh=0.45):
+        """
+        Parameters
+        ----------
+        n_classes: int
+            类别数
+
+        image_size: int
+            图片尺寸，必须是 32 的倍数
+
+        anchors: list of shape `(1, 3, n_anchors, 2)`
+            输入图像大小为 416 时对应的先验框, 尺度从到到大
+
+        conf_thresh: float
+            置信度阈值
+
+        nms_thresh: float
+            非极大值抑制的交并比阈值，值越大保留的预测框越多
+        """
         super().__init__()
+        if image_size <= 0 or image_size % 32 != 0:
+            raise ValueError("image_size 必须是 32 的倍数")
+
+        # 先验框
+        anchors = anchors or [
+            [[142, 110], [192, 243], [459, 401]],
+            [[36, 75], [76, 55], [72, 146]],
+            [[12, 16], [19, 36], [40, 28]],
+        ]
+        anchors = np.array(anchors, dtype=np.float32)
+        anchors = anchors*image_size/416
+        self.anchors = anchors.tolist()  # type:list
+
+        self.n_classes = n_classes
+        self.image_size = image_size
+
         # 主干网络
         self.backbone = CSPDarkNet()
 
@@ -253,7 +307,7 @@ class Yolo(nn.Module):
         self.conv_for_P3 = CBLBlock(256, 128, 1)
         self.make_five_conv2 = make_five_cbl([256, 128, 256])
 
-        channel = 3 * (5 + n_classes)
+        channel = len(self.anchors[1]) * (5 + n_classes)
         self.yolo_head3 = make_yolo_head([128, 256, channel])
 
         self.down_sample1 = CBLBlock(128, 256, 3, stride=2)
@@ -265,6 +319,10 @@ class Yolo(nn.Module):
         self.make_five_conv4 = make_five_cbl([1024, 512, 1024])
 
         self.yolo_head1 = make_yolo_head([512, 1024, channel])
+
+        # 探测器
+        self.detector = Detector(
+            self.anchors, image_size, n_classes, conf_thresh, nms_thresh)
 
     def forward(self, x: torch.Tensor):
         """ 前馈
@@ -315,3 +373,92 @@ class Yolo(nn.Module):
         y0 = self.yolo_head1(P5)  # (N, 3*(5+n_classes), 13, 13)
 
         return y0, y1, y2
+
+    @torch.no_grad()
+    def predict(self, x: torch.Tensor):
+        """ 预测结果
+
+        Parameters
+        ----------
+        x: Tensor of shape `(N, 3, H, W)`
+            输入图像
+
+        Returns
+        -------
+        out: List[Dict[int, Tensor]]
+            所有输入图片的检测结果，列表中的一个元素代表一张图的检测结果，
+            字典中的键为类别索引，值为该类别的检测结果，最后一维为 `(conf, cx, cy, w, h)`，
+        """
+        return self.detector(self(x))
+
+    def detect(self, image: Union[str, np.ndarray], classes: List[str], use_gpu=True, show_conf=True) -> Image.Image:
+        """ 对图片进行目标检测
+
+        Parameters
+        ----------
+        image: str of `np.ndarray`
+            图片路径或者 RGB 图像
+
+        classes: List[str]
+            类别名字列表
+
+        use_gpu: bool
+            是否使用 GPU
+
+        show_conf: bool
+            是否显示置信度
+
+        Returns
+        -------
+        image: `~PIL.Image.Image`
+            绘制了边界框、置信度和类别的图像
+        """
+        if isinstance(image, str):
+            if os.path.exists(image):
+                image = np.array(Image.open(image).convert('RGB'))
+            else:
+                raise FileNotFoundError("图片不存在，请检查图片路径！")
+
+        h, w, channels = image.shape
+        if channels != 3:
+            raise ValueError('输入的必须是三个通道的 RGB 图像')
+
+        x = ToTensor(self.image_size).transform(image)
+        if use_gpu:
+            x = x.cuda()
+
+        # 预测边界框和置信度，shape: (n_classes, top_k, 5)
+        y = self.predict(x)
+        if not y:
+            return Image.fromarray(image)
+
+        # 筛选出置信度不小于阈值的预测框
+        bbox = []
+        conf = []
+        label = []
+        for c, pred in y[0].items():
+            # shape: (n_boxes, 5)
+            pred = pred.numpy() # type: np.ndarray
+
+            # 将边界框还原会原来的尺寸
+            boxes = rescale_bbox(pred[:, 1:], self.image_size, h, w)
+            bbox.append(boxes)
+
+            conf.extend(pred[:, 0].tolist())
+            label.extend([classes[c]] * pred.shape[0])
+
+        if not show_conf:
+            conf = None
+
+        image = draw(image, np.vstack(bbox), label, conf)
+        return image
+
+    def load(self, model_path: Union[Path, str]):
+        """ 载入模型
+
+        Parameters
+        ----------
+        model_path: str or Path
+            模型文件路径
+        """
+        self.load_state_dict(torch.load(model_path))

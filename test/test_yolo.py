@@ -24,4 +24,4 @@ class TestYolo(unittest.TestCase):
         """ 测试推理 """
         x = torch.rand(2, 3, 416, 416).cuda()
         out = self.model.predict(x)
-        print('\n预测结果：', out[0, 0, :5])
+        print('\n预测结果：', out[0])

@@ -20,13 +20,13 @@ def image_detect(model_path: str, image_path: str, classes: List[str], image_siz
         图片路径
 
     classes: List[str]
-        类别列表
+        类别名字列表
 
     image_size: int
         输入神经网络的图片大小，必须是 32 的倍数
 
-    anchors: list
-        输入神经网络的图像尺寸为 416 时的先验框
+    anchors: list of shape `(1, 3, n_anchors, 2)`
+        输入神经网络的图像尺寸为 416 时的先验框，尺寸从大到小
 
     conf_thresh: float
         置信度阈值，不会显示小于这个阈值的预测框
@@ -46,7 +46,7 @@ def image_detect(model_path: str, image_path: str, classes: List[str], image_siz
         绘制了边界框、类别和置信度的图像
     """
     # 创建模型
-    model = Yolo(len(classes), image_size, anchors, nms_thresh)
+    model = Yolo(len(classes), image_size, anchors, conf_thresh, nms_thresh)
     if use_gpu:
         model = model.cuda()
 
@@ -55,7 +55,7 @@ def image_detect(model_path: str, image_path: str, classes: List[str], image_siz
     model.eval()
 
     # 检测目标
-    return model.detect(image_path, classes, conf_thresh, use_gpu, show_conf)
+    return model.detect(image_path, classes, use_gpu, show_conf)
 
 
 def camera_detect(model_path: str, classes: List[str], image_size: int = 416, anchors: list = None,
@@ -89,7 +89,7 @@ def camera_detect(model_path: str, classes: List[str], image_size: int = 416, an
         是否使用 gpu 加速检测
     """
     # 创建模型
-    model = Yolo(len(classes), image_size, anchors, nms_thresh)
+    model = Yolo(len(classes), image_size, anchors, conf_thresh, nms_thresh)
     if use_gpu:
         model = model.cuda()
 
@@ -106,8 +106,7 @@ def camera_detect(model_path: str, classes: List[str], image_size: int = 416, an
     stream = WebcamVideoStream(src=camera_src).start()
     while True:
         image = stream.read()
-        image = np.array(model.detect(
-            image, classes, conf_thresh, use_gpu=use_gpu))
+        image = np.array(model.detect(image, classes, use_gpu))
         fps.update()
 
         # 显示检测结果

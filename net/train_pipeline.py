@@ -127,7 +127,7 @@ class TrainPipeline:
             self.model.load(yolo_path)
             print('🧪 成功载入 Yolo 模型：' + yolo_path)
         elif darknet_path:
-            self.model.darknet.load(darknet_path)
+            self.model.backbone.load(darknet_path)
             print('🧪 成功载入 Darknet53 模型：' + darknet_path)
         else:
             raise ValueError("必须指定预训练的 Darknet53 模型文件路径")
@@ -178,7 +178,13 @@ class TrainPipeline:
 
         # 数据迭代器
         data_loader = DataLoader(
-            self.dataset, self.batch_size, shuffle=True, drop_last=True, collate_fn=collate_fn)
+            self.dataset,
+            self.batch_size,
+            shuffle=True,
+            drop_last=True,
+            pin_memory=True,
+            collate_fn=collate_fn
+        )
 
         bar_format = '{desc}{n_fmt:>4s}/{total_fmt:<4s}|{bar}|{postfix}'
         print('🚀 开始训练！')

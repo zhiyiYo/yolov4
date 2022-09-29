@@ -5,14 +5,14 @@ from utils.augmentation_utils import YoloAugmentation
 
 # train config
 config = {
-    "n_classes": 20,
+    "n_classes": len(VOCDataset.classes),
     "image_size": 416,
     "anchors": [
-        [[116, 90], [156, 198], [373, 326]],
-        [[30, 61], [62, 45], [59, 119]],
-        [[10, 13], [16, 30], [33, 23]],
+        [142, 110], [192, 243], [459, 401],
+        [36, 75], [76, 55], [72, 146],
+        [12, 16], [19, 36], [40, 28],
     ],
-    "darknet_path": "model/darknet53.pth",
+    "darknet_path": "model/CSPdarknet53.pth",
     "batch_size": 4
 }
 

@@ -161,7 +161,7 @@ def decode(pred: Tensor, anchors: List[List[int]], n_classes: int, image_size: i
     n_anchors = len(anchors)
     N, _, h, w = pred.shape
 
-    # 调整特征图尺寸，方便索引
+    # 调整特征图尺寸，方便索引，调整后维度为 (N, n_anchors, H, W, n_classes+5)
     pred = pred.view(N, n_anchors, n_classes+5, h,
                      w).permute(0, 1, 3, 4, 2).contiguous().cpu()
 
@@ -178,7 +178,7 @@ def decode(pred: Tensor, anchors: List[List[int]], n_classes: int, image_size: i
     ph = anchors[:, 1].view(n_anchors, 1, 1).repeat(N, 1, h, w)
 
     # 解码
-    out = torch.zeros(N, n_anchors, h, w, n_classes+5)
+    out = torch.zeros_like(pred)
     out[..., 0] = cx + pred[..., 0].sigmoid()
     out[..., 1] = cy + pred[..., 1].sigmoid()
     out[..., 2] = pw*torch.exp(pred[..., 2])
