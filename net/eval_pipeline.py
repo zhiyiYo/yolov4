@@ -7,6 +7,7 @@ import numpy as np
 import torch
 from torch import cuda
 from PIL import Image
+from prettytable import PrettyTable
 from utils.box_utils import jaccard_overlap_numpy, center_to_corner_numpy, rescale_bbox
 from utils.augmentation_utils import ToTensor
 
@@ -165,6 +166,7 @@ class EvalPipeline:
 
         print('\n\n🧪 正在计算 AP 中...')
         mAP = 0
+        table = PrettyTable(["class", "AP"])
         for c in self.dataset.classes:
             ap, precision, recall = self._get_AP(c)
             result[c] = {
@@ -173,10 +175,11 @@ class EvalPipeline:
                 'recall': recall
             }
             mAP += ap
-            print(f'class {c}: AP={ap:.2%}')
+            table.add_row([c, f"{ap:.2%}"])
 
         mAP /= len(self.dataset.classes)
-        print(f'mAP of {self.model_path}: {mAP:.2%}')
+        table.add_column("mAP", [f"{mAP:.2%}"] + [""]*(len(self.dataset.classes)-1))
+        print(table)
 
         # 保存评估结果
         self.save_dir.mkdir(exist_ok=True, parents=True)
