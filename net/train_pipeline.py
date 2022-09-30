@@ -1,6 +1,5 @@
 # coding:utf-8
 import time
-import traceback
 from pathlib import Path
 from datetime import datetime
 
@@ -9,10 +8,11 @@ from torch import optim, cuda
 from torch.backends import cudnn
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
-from utils.log_utils import LossLogger
+from utils.log_utils import LossLogger, Logger
 from utils.datetime_utils import time_delta
+from utils.lr_schedule_utils import WarmUpCosLR, determin_lr
 
-from .dataset import collate_fn
+from .dataset import make_data_loader
 from .loss import YoloLoss
 from .yolo import Yolo
 
@@ -24,7 +24,7 @@ def exception_handler(train_func):
             return train_func(train_pipeline, *args, **kwargs)
         except BaseException as e:
             if not isinstance(e, KeyboardInterrupt):
-                traceback.print_exc()
+                Logger("error").error(f"{e.__class__.__name__}: {e}")
 
             train_pipeline.save()
 
@@ -40,9 +40,9 @@ class TrainPipeline:
     """ 训练模型流水线 """
 
     def __init__(self, n_classes: int, image_size: int, anchors: list, dataset: Dataset, darknet_path: str = None,
-                 yolo_path: str = None, lr=0.01, backbone_lr=1e-3, momentum=0.9, weight_decay=4e-5, lr_step_size=20,
-                 batch_size=16, start_epoch=0, max_epoch=60, save_frequency=5, use_gpu=True, save_dir='model',
-                 log_file: str = None, log_dir='log'):
+                 yolo_path: str = None, lr=0.01, momentum=0.9, weight_decay=4e-5, freeze=True, batch_size=4,
+                 freeze_batch_size=8, num_workers=4, freeze_epoch=20, start_epoch=0, max_epoch=60, save_frequency=5,
+                 use_gpu=True, save_dir='model', log_file: str = None, log_dir='log'):
         """
         Parameters
         ----------
@@ -69,9 +69,6 @@ class TrainPipeline:
         lr: float
             学习率
 
-        backbone_lr: float
-            主干网络学习率
-
         momentum: float
             冲量
 
@@ -81,17 +78,29 @@ class TrainPipeline:
         lr_step_size: int
             学习率退火的步长
 
+        freeze: bool
+            是否使用冻结训练
+
         batch_size: int
-            训练集 batch 大小
+            非冻结训练过程训练集的批大小
+
+        freeze_batch_size: int
+            冻结训练过程中的批大小
+
+        num_workers: int
+            加载数据的线程数
+
+        freeze_epoch: int
+            冻结训练的世代数
 
         start_epoch: int
-            Yolo 模型文件包含的参数是训练了多少个 epoch 的结果
+            Yolo 模型文件包含的参数是训练了多少个世代的结果
 
         max_epoch: int
-            最多迭代多少个 epoch
+            最多迭代多少个世代
 
         save_frequency: int
-            迭代多少个 epoch 保存一次模型
+            迭代多少个世代保存一次模型
 
         use_gpu: bool
             是否使用 GPU 加速训练
@@ -109,11 +118,15 @@ class TrainPipeline:
         self.save_dir = Path(save_dir)
         self.use_gpu = use_gpu
         self.save_frequency = save_frequency
+        self.freeze_batch_size = freeze_batch_size
         self.batch_size = batch_size
 
+        self.lr = lr
+        self.freeze = freeze
         self.max_epoch = max_epoch
         self.start_epoch = start_epoch
         self.current_epoch = start_epoch
+        self.free_epoch = freeze_epoch
 
         if use_gpu and cuda.is_available():
             self.device = torch.device('cuda')
@@ -132,26 +145,27 @@ class TrainPipeline:
         else:
             raise ValueError("必须指定预训练的 Darknet53 模型文件路径")
 
-        # 创建优化器和损失函数
-        self.criterion = YoloLoss(anchors, n_classes, image_size)
+        self.model.backbone.self_freezed(freeze)
 
-        darknet_params = self.model.darknet.parameters()
-        other_params = [i for i in self.model.parameters()
-                        if i not in darknet_params]
+        # 创建优化器和损失函数
+        bs = freeze_batch_size if freeze else batch_size
+        lr_fit, lr_min_fit = determin_lr(lr, bs)
+        self.criterion = YoloLoss(anchors, n_classes, image_size)
         self.optimizer = optim.SGD(
-            [
-                {"params": darknet_params, 'initial_lr': backbone_lr, 'lr': backbone_lr},
-                {'params': other_params, 'initial_lr': lr, 'lr': lr}
-            ],
+            self.model.parameters(),
+            lr=lr_fit,
             momentum=momentum,
             weight_decay=weight_decay
         )
+        self.lr_schedule = WarmUpCosLR(
+            self.optimizer, lr_fit, lr_min_fit, max_epoch)
 
-        self.lr_schedule = optim.lr_scheduler.StepLR(
-            self.optimizer, lr_step_size, 0.1, last_epoch=start_epoch)
+        # 数据集加载器
+        self.num_worksers = num_workers
+        self.data_loader = make_data_loader(self.dataset, bs, num_workers)
 
         # 训练损失记录器
-        self.n_batches = len(self.dataset)//self.batch_size
+        self.n_batches = len(self.dataset)//bs
         self.logger = LossLogger(self.n_batches, log_file, log_dir)
 
     def save(self):
@@ -177,20 +191,22 @@ class TrainPipeline:
         self.logger.save_dir = self.logger.save_dir/t
 
         # 数据迭代器
-        data_loader = DataLoader(
-            self.dataset,
-            self.batch_size,
-            shuffle=True,
-            drop_last=True,
-            pin_memory=True,
-            collate_fn=collate_fn
-        )
 
         bar_format = '{desc}{n_fmt:>4s}/{total_fmt:<4s}|{bar}|{postfix}'
         print('🚀 开始训练！')
 
+        is_unfreezed = False
         for e in range(self.start_epoch, self.max_epoch):
             self.current_epoch = e
+
+            # 解冻训练
+            if self.freeze and e > self.free_epoch and not is_unfreezed:
+                is_unfreezed = True
+                self.lr_schedule.set_lr(*determin_lr(self.lr, self.batch_size))
+                self.data_loader = make_data_loader(
+                    self.dataset, self.batch_size, self.num_worksers)
+                self.logger.frequency = len(self.dataset)//self.batch_size
+                self.model.backbone.self_freezed(False)
 
             self.model.train()
 
@@ -199,7 +215,7 @@ class TrainPipeline:
             self.pbar.set_description(f"\33[36m💫 Epoch {(e+1):5d}")
             start_time = datetime.now()
 
-            for images, targets in data_loader:
+            for images, targets in self.data_loader:
                 # 预测边界框、置信度和条件类别概率
                 preds = self.model(images.to(self.device))
 
@@ -224,7 +240,7 @@ class TrainPipeline:
             self.pbar.close()
 
             # 学习率退火
-            self.lr_schedule.step()
+            self.lr_schedule.step(e)
 
             # 定期保存模型
             if e > self.start_epoch and (e+1-self.start_epoch) % self.save_frequency == 0:

@@ -175,6 +175,11 @@ class CSPDarkNet(nn.Module):
         """
         self.load_state_dict(torch.load(model_path))
 
+    def self_freezed(self, freeze: bool):
+        """ 设置模型参数是否被冻结 """
+        for param in self.parameters():
+            param.requires_grad = not freeze
+
 
 class CBLBlock(nn.Module):
     """ CBL 块 """
@@ -334,6 +339,9 @@ class Yolo(nn.Module):
 
         Returns
         -------
+        y0: Tensor of shape `(N, 3*(5+n_classes), 13, 13)`
+        y1: Tensor of shape `(N, 3*(5+n_classes), 26, 26)`
+        y2: Tensor of shape `(N, 3*(5+n_classes), 52, 52)`
         """
         # 主干网络
         x2, x1, x0 = self.backbone(x)

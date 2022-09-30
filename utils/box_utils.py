@@ -8,6 +8,7 @@ import torch
 from numpy import ndarray
 from PIL import Image, ImageDraw, ImageFont
 from torch import Tensor
+from math import pi
 
 
 def log_sum_exp(x: Tensor):
@@ -90,6 +91,45 @@ def jaccard_overlap_numpy(box: np.ndarray, boxes: np.ndarray):
     # 计算 iou
     iou = inter/(area_box+area_boxes-inter)  # type: np.ndarray
     return iou
+
+
+def ciou(bbox1: Tensor, bbox2: Tensor):
+    """ 计算两组边界框一一对应的 CIOU
+
+    Parameters
+    ----------
+    bbox1, bbox2: Tensor of shape `(..., 4)`
+        维度相同的边界框，形式为 `(cx, cy, w, h)`
+    """
+    # 转换到边角坐标形式
+    xy_min1 = bbox1[..., [0, 1]] - bbox1[..., [2, 3]]/2
+    xy_max1 = bbox1[..., [0, 1]] + bbox1[..., [2, 3]]/2
+    xy_min2 = bbox2[..., [0, 1]] - bbox2[..., [2, 3]]/2
+    xy_max2 = bbox2[..., [0, 1]] + bbox2[..., [2, 3]]/2
+
+    # 计算 IOU
+    xy_max = torch.min(xy_max1, xy_max2)
+    xy_min = torch.max(xy_min1, xy_min2)
+    inter = (xy_max-xy_min).clamp(min=0)
+    inter = inter[..., 0]*inter[..., 1]
+    union = bbox1[..., 2]*bbox1[..., 3] + bbox2[..., 2]*bbox2[..., 3] - inter
+    iou = inter/union
+
+    # 计算中心距离
+    center_distance = (torch.pow(bbox1[..., :2]-bbox2[..., :2], 2)).sum(dim=-1)
+
+    # 计算对角线距离
+    xy_max = torch.max(xy_max1, xy_max2)
+    xy_min = torch.min(xy_min1, xy_min2)
+    diag_distance = torch.pow(xy_max-xy_min, 2).sum(dim=-1)
+
+    # 计算尺度相似性
+    v = 4 / (pi**2) * torch.pow(
+        torch.atan(bbox1[..., 2]/bbox1[..., 3].clamp(min=1e-6)) -
+        torch.atan(bbox2[..., 2]/bbox2[..., 3].clamp(min=1e-6)), 2
+    )
+    alpha = v / torch.clamp((1.0 - iou + v), min=1e-6)
+    return iou - center_distance/diag_distance - alpha*v
 
 
 def center_to_corner(boxes: Tensor):
@@ -223,8 +263,8 @@ def match(anchors: list, targets: List[Tensor], h: int, w: int, n_classes: int, 
     n_mask: Tensor of shape `(N, n_anchors, H, W)`
         反例遮罩
 
-    t: Tensor of shape `(N, n_anchors, H, W, n_classes+5)`
-        标签
+    gt: Tensor of shape `(N, n_anchors, H, W, n_classes+5)`
+        标签，最后一个维度为 `(cx, cy, w, h, obj, c1, c2, ...)`
 
     scale: Tensor of shape `(N, n_anchors, h, w)`
         缩放值，用于惩罚小方框的定位
@@ -235,7 +275,7 @@ def match(anchors: list, targets: List[Tensor], h: int, w: int, n_classes: int, 
     # 初始化返回值
     p_mask = torch.zeros(N, n_anchors, h, w)
     n_mask = torch.ones(N, n_anchors, h, w)
-    t = torch.zeros(N, n_anchors, h, w, n_classes+5)
+    gt = torch.zeros(N, n_anchors, h, w, n_classes+5)
     scale = torch.zeros(N, n_anchors, h, w)
 
     # 匹配先验框和边界框
@@ -264,17 +304,17 @@ def match(anchors: list, targets: List[Tensor], h: int, w: int, n_classes: int, 
             n_mask[i, iou >= overlap_thresh, gi, gj] = 0
 
             # 计算标签值
-            t[i, index, gi, gj, 0] = cx-gj
-            t[i, index, gi, gj, 1] = cy-gi
-            t[i, index, gi, gj, 2] = math.log(gw/anchors[index, 2]+1e-16)
-            t[i, index, gi, gj, 3] = math.log(gh/anchors[index, 3]+1e-16)
-            t[i, index, gi, gj, 4] = 1
-            t[i, index, gi, gj, 5+int(target[j, 0])] = 1
+            gt[i, index, gi, gj, 0] = cx
+            gt[i, index, gi, gj, 1] = cy
+            gt[i, index, gi, gj, 2] = gw
+            gt[i, index, gi, gj, 3] = gh
+            gt[i, index, gi, gj, 4] = 1
+            gt[i, index, gi, gj, 5+int(target[j, 0])] = 1
 
             # 缩放值，用于惩罚小方框的定位
             scale[i, index, gi, gj] = 2-target[j, 3]*target[j, 4]
 
-    return p_mask, n_mask, t, scale
+    return p_mask, n_mask, gt, scale
 
 
 def nms(boxes: Tensor, scores: Tensor, overlap_thresh=0.45, top_k=100):

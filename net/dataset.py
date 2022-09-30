@@ -7,7 +7,7 @@ import random
 import cv2 as cv
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
 from utils.augmentation_utils import Transformer
 from utils.annotation_utils import AnnotationReader
 from utils.box_utils import corner_to_center_numpy
@@ -134,7 +134,8 @@ class VOCDataset(Dataset):
         else:
             image, bbox, label = self.read_image_label(index)
             if self.transformer:
-                image, bbox, label = self.transformer.transform(image, bbox, label)
+                image, bbox, label = self.transformer.transform(
+                    image, bbox, label)
 
         image = image.astype(np.float32)
         image /= 255.0
@@ -276,3 +277,15 @@ def collate_fn(batch: List[Tuple[torch.Tensor, np.ndarray]]):
         targets.append(torch.Tensor(target))
 
     return torch.stack(images, 0), targets
+
+
+def make_data_loader(dataset: VOCDataset, batch_size, num_workers=4, shuffle=True, drop_last=True, pin_memory=True):
+    return DataLoader(
+        dataset,
+        batch_size,
+        num_workers=num_workers,
+        shuffle=shuffle,
+        drop_last=drop_last,
+        pin_memory=pin_memory,
+        collate_fn=collate_fn
+    )

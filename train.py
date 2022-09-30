@@ -8,12 +8,17 @@ config = {
     "n_classes": len(VOCDataset.classes),
     "image_size": 416,
     "anchors": [
-        [142, 110], [192, 243], [459, 401],
-        [36, 75], [76, 55], [72, 146],
-        [12, 16], [19, 36], [40, 28],
+        [[142, 110], [192, 243], [459, 401]],
+        [[36, 75], [76, 55], [72, 146]],
+        [[12, 16], [19, 36], [40, 28]],
     ],
     "darknet_path": "model/CSPdarknet53.pth",
-    "batch_size": 4
+    "lr": 1e-2,
+    "batch_size": 4,
+    "freeze_batch_size": 8,
+    "freeze_epoch": 1,
+    "max_epoch": 2,
+    "num_workers": 0
 }
 
 # load dataset

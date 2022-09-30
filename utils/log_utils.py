@@ -1,6 +1,8 @@
 # coding:utf-8
-import os
 import json
+import logging
+import os
+import weakref
 from pathlib import Path
 
 
@@ -92,3 +94,71 @@ class LossLogger:
                 'cls_losses': self.cls_losses
             }
             json.dump(data, f)
+
+
+
+_loggers = weakref.WeakValueDictionary()
+
+
+def loggerCache(cls):
+    """ decorator for caching logger """
+
+    def wrapper(name, *args, **kwargs):
+        if name not in _loggers:
+            instance = cls(name, *args, **kwargs)
+            _loggers[name] = instance
+        else:
+            instance = _loggers[name]
+
+        return instance
+
+    return wrapper
+
+
+@loggerCache
+class Logger:
+    """ 日志记录器 """
+
+    log_folder = Path('log')
+
+    def __init__(self, fileName: str):
+        """
+        Parameters
+        ----------
+        fileName: str
+            log filename which doesn't contain `.log` suffix
+        """
+        self.log_folder.mkdir(exist_ok=True, parents=True)
+        self._log_file = self.log_folder/(fileName+'.log')
+        self._logger = logging.getLogger(fileName)
+        self._console_handler = logging.StreamHandler()
+        self._file_handler = logging.FileHandler(
+            self._log_file, encoding='utf-8')
+
+        # set log level
+        self._logger.setLevel(logging.DEBUG)
+        self._console_handler.setLevel(logging.DEBUG)
+        self._file_handler.setLevel(logging.DEBUG)
+
+        # set log format
+        fmt = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        self._console_handler.setFormatter(fmt)
+        self._file_handler.setFormatter(fmt)
+
+        self._logger.addHandler(self._console_handler)
+        self._logger.addHandler(self._file_handler)
+
+    def info(self, msg):
+        self._logger.info(msg)
+
+    def error(self, msg, exc_info=False):
+        self._logger.error(msg, exc_info=exc_info)
+
+    def debug(self, msg):
+        self._logger.debug(msg)
+
+    def warning(self, msg):
+        self._logger.warning(msg)
+
+    def critical(self, msg):
+        self._logger.critical(msg)
