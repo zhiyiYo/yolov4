@@ -25,7 +25,7 @@ class VOCDataset(Dataset):
     ]
 
     def __init__(self, root: Union[str, List[str]], image_set: Union[str, List[str]],
-                 tranformer: Transformer = None, color_transformer: Transformer = None, keep_difficult=False,
+                 transformer: Transformer = None, color_transformer: Transformer = None, keep_difficult=False,
                  use_mosaic=False, use_mixup=False, image_size=416):
         """
         Parameters
@@ -72,7 +72,7 @@ class VOCDataset(Dataset):
         self.keep_difficult = keep_difficult
         self.class_to_index = {c: i for i, c in enumerate(self.classes)}
 
-        self.transformer = tranformer    # 数据增强器
+        self.transformer = transformer    # 数据增强器
         self.color_transformer = color_transformer
         self.annotation_reader = AnnotationReader(
             self.class_to_index, keep_difficult)
@@ -111,7 +111,7 @@ class VOCDataset(Dataset):
             增强后的图像数据
 
         target: `np.ndarray` of shape `(n_objects, 5)`
-            标签数据，第一列为类别标签，剩下四列为边界框坐标 `(cx, cy, w, h)`
+            标签数据，每一行格式为 `(cx, cy, w, h, class)`
         """
         # 50% 的概率进行马赛克数据增强
         if self.use_mosaic and np.random.randint(2):
@@ -140,7 +140,7 @@ class VOCDataset(Dataset):
         image = image.astype(np.float32)
         image /= 255.0
         bbox = corner_to_center_numpy(bbox)
-        target = np.hstack((label[:, np.newaxis], bbox))
+        target = np.hstack((bbox, label[:, np.newaxis]))
 
         return torch.from_numpy(image).permute(2, 0, 1), target
 

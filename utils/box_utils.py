@@ -11,59 +11,50 @@ from torch import Tensor
 from math import pi
 
 
-def log_sum_exp(x: Tensor):
-    """ 计算 log(∑exp(xi))
+def iou(bbox1: Tensor, bbox2: Tensor):
+    """ 计算两组边界框的交并比，四个坐标为 `(cx, cy, w, h)`
 
     Parameters
     ----------
-    x: Tensor of shape `(n, n_classes)`
-    """
-    x_max = x.detach().max()
-    out = torch.log(torch.sum(torch.exp(x-x_max), dim=1, keepdim=True))+x_max
-    return out
+    bbox1: Tensor of shape `(A, 4)`
+        第一组边界框
 
-
-def jaccard_overlap(prior: Tensor, bbox: Tensor):
-    """ 计算预测的先验框和边界框真值的交并比，四个坐标为 `(xmin, ymin, xmax, ymax)`
-
-    Parameters
-    ----------
-    prior: Tensor of shape `(A, 4)`
-        先验框
-
-    bbox: Tensor of shape  `(B, 4)`
-        边界框真值
+    bbox2: Tensor of shape  `(B, 4)`
+        第二组边界框
 
     Returns
     -------
     iou: Tensor of shape `(A, B)`
         交并比
     """
-    A = prior.size(0)
-    B = bbox.size(0)
+    A = bbox1.size(0)
+    B = bbox2.size(0)
+
+    bbox1 = center_to_corner(bbox1)
+    bbox2 = center_to_corner(bbox2)
 
     # 将先验框和边界框真值的 xmax、ymax 以及 xmin、ymin进行广播使得维度一致，(A, B, 2)
     # 再计算 xmax 和 ymin 较小者、xmin 和 ymin 较大者，W=xmax较小-xmin较大，H=ymax较小-ymin较大
-    xy_max = torch.min(prior[:, 2:].unsqueeze(1).expand(A, B, 2),
-                       bbox[:, 2:].broadcast_to(A, B, 2))
-    xy_min = torch.max(prior[:, :2].unsqueeze(1).expand(A, B, 2),
-                       bbox[:, :2].broadcast_to(A, B, 2))
+    xy_max = torch.min(bbox1[:, 2:].unsqueeze(1).expand(A, B, 2),
+                       bbox2[:, 2:].broadcast_to(A, B, 2))
+    xy_min = torch.max(bbox1[:, :2].unsqueeze(1).expand(A, B, 2),
+                       bbox2[:, :2].broadcast_to(A, B, 2))
 
     # 计算交集面积
     inter = (xy_max-xy_min).clamp(min=0)
     inter = inter[:, :, 0]*inter[:, :, 1]
 
     # 计算每个矩形的面积
-    area_prior = ((prior[:, 2]-prior[:, 0]) *
-                  (prior[:, 3]-prior[:, 1])).unsqueeze(1).expand(A, B)
-    area_bbox = ((bbox[:, 2]-bbox[:, 0]) *
-                 (bbox[:, 3]-bbox[:, 1])).broadcast_to(A, B)
+    area_prior = ((bbox1[:, 2]-bbox1[:, 0]) *
+                  (bbox1[:, 3]-bbox1[:, 1])).unsqueeze(1).expand(A, B)
+    area_bbox = ((bbox2[:, 2]-bbox2[:, 0]) *
+                 (bbox2[:, 3]-bbox2[:, 1])).broadcast_to(A, B)
 
     return inter/(area_prior+area_bbox-inter)
 
 
 def jaccard_overlap_numpy(box: np.ndarray, boxes: np.ndarray):
-    """ 计算一个边界框和多个边界框的交并比
+    """ 计算一个边界框和多个边界框的交并比，坐标形式为 `(xmin, ymin, xmax, ymax)`
 
     Parameters
     ----------
@@ -113,7 +104,7 @@ def ciou(bbox1: Tensor, bbox2: Tensor):
     inter = (xy_max-xy_min).clamp(min=0)
     inter = inter[..., 0]*inter[..., 1]
     union = bbox1[..., 2]*bbox1[..., 3] + bbox2[..., 2]*bbox2[..., 3] - inter
-    iou = inter/union
+    iou = inter/(union+1e-7)
 
     # 计算中心距离
     center_distance = (torch.pow(bbox1[..., :2]-bbox2[..., :2], 2)).sum(dim=-1)
@@ -128,8 +119,9 @@ def ciou(bbox1: Tensor, bbox2: Tensor):
         torch.atan(bbox1[..., 2]/bbox1[..., 3].clamp(min=1e-6)) -
         torch.atan(bbox2[..., 2]/bbox2[..., 3].clamp(min=1e-6)), 2
     )
-    alpha = v / torch.clamp((1.0 - iou + v), min=1e-6)
-    return iou - center_distance/diag_distance - alpha*v
+    alpha = v / torch.clamp((1 - iou + v), min=1e-6)
+
+    return iou - center_distance/diag_distance.clamp(min=1e-6) - alpha*v
 
 
 def center_to_corner(boxes: Tensor):
@@ -176,7 +168,7 @@ def corner_to_center_numpy(boxes: ndarray) -> ndarray:
     return np.hstack(((boxes[:, :2]+boxes[:, 2:])/2, boxes[:, 2:]-boxes[:, :2]))
 
 
-def decode(pred: Tensor, anchors: List[List[int]], n_classes: int, image_size: int):
+def decode(pred: Tensor, anchors: Union[List[List[int]], np.ndarray], n_classes: int, image_size: int, scale=True):
     """ 解码出预测框
 
     Parameters
@@ -184,14 +176,17 @@ def decode(pred: Tensor, anchors: List[List[int]], n_classes: int, image_size: i
     pred: Tensor of shape `(N, (n_classes+5)*n_anchors, H, W)`
         神经网络输出的一个特征图
 
-    anchors: List[List[int]]
-        先验框
+    anchors: List[List[int]] or `np.ndarray` of shape `(n_anchors, 2)`
+        未根据特征图大小进行缩放的先验框
 
     n_classes: int
         类别数
 
     image_size: int
         输入神经网络的图像尺寸
+
+    scale: bool
+        是否将预测框缩放到原始图像的尺度，`False` 则缩放到特征图的尺度
 
     Returns
     -------
@@ -226,22 +221,26 @@ def decode(pred: Tensor, anchors: List[List[int]], n_classes: int, image_size: i
     out[..., 4:] = pred[..., 4:].sigmoid()
 
     # 缩放预测框到图像大小为 (image_size, image_size) 时的绝对大小
-    out[..., [0, 2]] *= step_w
-    out[..., [1, 3]] *= step_h
+    if scale:
+        out[..., [0, 2]] *= step_w
+        out[..., [1, 3]] *= step_h
 
     return out
 
 
-def match(anchors: list, targets: List[Tensor], h: int, w: int, n_classes: int, overlap_thresh=0.5):
-    """ 匹配先验框和边界框真值
+def match(anchors: list, anchor_mask: list, targets: List[Tensor], h: int, w: int, n_classes: int, overlap_thresh=0.5):
+    """ 匹配先验框和边界框真值，标记出正负样本
 
     Parameters
     ----------
-    anchors: list of shape `(n_anchors, 2)`
+    anchors: list of shape `(n_anchors*3, 2)`
         根据特征图的大小进行过缩放的先验框
 
-    targets: List[Tensor]
-        标签，每个元素的最后一个维度的第一个元素为类别，剩下四个为 `(cx, cy, w, h)`
+    anchor_mask: List[int] of shape `(n_anchors, )`
+        特征图对应的先验框索引
+
+    targets: List[Tensor] of shape (N, (n_objects, 4))
+        多张图片的标签，最后一维为 `(cx, cy, w, h, class)`
 
     h: int
         特征图的高度
@@ -265,56 +264,61 @@ def match(anchors: list, targets: List[Tensor], h: int, w: int, n_classes: int, 
 
     gt: Tensor of shape `(N, n_anchors, H, W, n_classes+5)`
         标签，最后一个维度为 `(cx, cy, w, h, obj, c1, c2, ...)`
-
-    scale: Tensor of shape `(N, n_anchors, h, w)`
-        缩放值，用于惩罚小方框的定位
     """
     N = len(targets)
-    n_anchors = len(anchors)
+    n_anchors = len(anchor_mask)
 
     # 初始化返回值
     p_mask = torch.zeros(N, n_anchors, h, w)
     n_mask = torch.ones(N, n_anchors, h, w)
     gt = torch.zeros(N, n_anchors, h, w, n_classes+5)
-    scale = torch.zeros(N, n_anchors, h, w)
 
     # 匹配先验框和边界框
-    anchors = np.hstack((np.zeros((n_anchors, 2)), np.array(anchors)))
+    anchors = torch.hstack((torch.zeros((len(anchors), 2)), Tensor(anchors)))
+
     for i in range(N):
-        target = targets[i]  # shape:(n_objects, 5)
+        if len(targets[i]) == 0:
+            continue
+
+        # 反归一化边界框
+        target = torch.zeros_like(targets[i])  # shape:(n_objects, 5)
+        target[:, [0, 2]] = targets[i][:, [0, 2]] * w
+        target[:, [1, 3]] = targets[i][:, [1, 3]] * h
+        target[:, 4] = targets[i][:, 4]
+        bbox = torch.cat((torch.zeros(target.size(0), 2), target[:, 2:4]), 1)
+
+        # 计算边界框和所有先验框的交并比
+        best_indexes = torch.argmax(iou(bbox, anchors), dim=1)
 
         # 迭代每一个 ground truth box
-        for j in range(target.size(0)):
+        for j, best_i in enumerate(best_indexes):
+            if best_i not in anchor_mask:
+                continue
+
+            k = anchor_mask.index(best_i)
+
             # 获取标签数据
-            cx, gw = target[j, [1, 3]]*w
-            cy, gh = target[j, [2, 4]]*h
+            cx, gw = target[j, [0, 2]]
+            cy, gh = target[j, [1, 3]]
 
             # 获取边界框中心所处的单元格的坐标
             gj, gi = int(cx), int(cy)
 
-            # 计算边界框和先验框的交并比
-            bbox = np.array([0, 0, gw, gh])
-            iou = jaccard_overlap_numpy(bbox, anchors)
-
             # 标记出正例和反例
-            index = np.argmax(iou)
-            p_mask[i, index, gi, gj] = 1
+            p_mask[i, k, gi, gj] = 1
             # 正例除外，与 ground truth 的交并比都小于阈值则为负例
-            n_mask[i, index, gi, gj] = 0
-            n_mask[i, iou >= overlap_thresh, gi, gj] = 0
+            n_mask[i, k, gi, gj] = 0
+            # n_mask[i, iou >= overlap_thresh, gi, gj] = 0
 
             # 计算标签值
-            gt[i, index, gi, gj, 0] = cx
-            gt[i, index, gi, gj, 1] = cy
-            gt[i, index, gi, gj, 2] = gw
-            gt[i, index, gi, gj, 3] = gh
-            gt[i, index, gi, gj, 4] = 1
-            gt[i, index, gi, gj, 5+int(target[j, 0])] = 1
+            gt[i, k, gi, gj, 0] = cx
+            gt[i, k, gi, gj, 1] = cy
+            gt[i, k, gi, gj, 2] = gw
+            gt[i, k, gi, gj, 3] = gh
+            gt[i, k, gi, gj, 4] = 1
+            gt[i, k, gi, gj, 5+int(target[j, 4])] = 1
 
-            # 缩放值，用于惩罚小方框的定位
-            scale[i, index, gi, gj] = 2-target[j, 3]*target[j, 4]
-
-    return p_mask, n_mask, gt, scale
+    return p_mask, n_mask, gt
 
 
 def nms(boxes: Tensor, scores: Tensor, overlap_thresh=0.45, top_k=100):

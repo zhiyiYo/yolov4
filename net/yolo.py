@@ -175,7 +175,7 @@ class CSPDarkNet(nn.Module):
         """
         self.load_state_dict(torch.load(model_path))
 
-    def self_freezed(self, freeze: bool):
+    def set_freezed(self, freeze: bool):
         """ 设置模型参数是否被冻结 """
         for param in self.parameters():
             param.requires_grad = not freeze
@@ -389,7 +389,7 @@ class Yolo(nn.Module):
         Parameters
         ----------
         x: Tensor of shape `(N, 3, H, W)`
-            输入图像
+            输入图像，已被归一化
 
         Returns
         -------
@@ -446,7 +446,7 @@ class Yolo(nn.Module):
         label = []
         for c, pred in y[0].items():
             # shape: (n_boxes, 5)
-            pred = pred.numpy() # type: np.ndarray
+            pred = pred.numpy()  # type: np.ndarray
 
             # 将边界框还原会原来的尺寸
             boxes = rescale_bbox(pred[:, 1:], self.image_size, h, w)

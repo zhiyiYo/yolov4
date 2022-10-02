@@ -3,10 +3,10 @@ from torch.optim import Optimizer
 from math import pi, cos
 
 
-class WarmUpCosLR:
+class WarmUpCosLRSchedule:
     """ 热启动余弦学习率规划器 """
 
-    def __init__(self, optimizer: Optimizer, lr, min_lr, total_epoch, warm_up_ratio=0.05, no_aug_ratio=0.05, warm_up_factor=0.1):
+    def __init__(self, optimizer: Optimizer, lr: float, min_lr: float, total_epoch: int, warm_up_ratio=0.05, no_aug_ratio=0.05, warm_up_factor=1/3):
         """
         Parameters
         ----------
@@ -26,7 +26,7 @@ class WarmUpCosLR:
             热启动迭代比例
 
         no_aug_ratio: float
-            没有图像增强的迭代比例
+            没有马赛克数据增强的迭代比例
 
         warm_up_factor: float
             第一次迭代时热启动学习率和初始学习率的比值
@@ -36,8 +36,8 @@ class WarmUpCosLR:
         self.optimizer = optimizer
         self.warm_up_factor = warm_up_factor
         self.total_epoch = total_epoch
-        self.warm_up_epoch = warm_up_ratio*total_epoch
-        self.no_aug_epoch = no_aug_ratio*total_epoch
+        self.warm_up_epoch = int(warm_up_ratio*total_epoch)
+        self.no_aug_epoch = int(no_aug_ratio*total_epoch)
 
     def step(self, epoch: int):
         """ 调整优化器的学习率 """
@@ -59,6 +59,12 @@ class WarmUpCosLR:
         """ 设置学习率 """
         self.lr = lr
         self.min_lr = min_lr
+
+
+def get_lr(optimizer):
+    """ 获取当前学习率 """
+    for param_group in optimizer.param_groups:
+        return param_group['lr']
 
 
 def determin_lr(lr, batch_size):

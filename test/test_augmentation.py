@@ -39,14 +39,14 @@ class TestAugmention(unittest.TestCase):
         bbox *= image.shape[0]
         image = torch.from_numpy(image).permute(2, 0, 1)/255
         bbox = corner_to_center_numpy(bbox)
-        target = np.hstack((label[:, np.newaxis], bbox))
+        target = np.hstack((bbox, label[:, np.newaxis]))
         self.draw(image, target)
 
     def draw(self, image: torch.Tensor, target):
         """ 绘制图像 """
         image = image.permute(1, 2, 0).numpy()*255
-        label = [self.dataset.classes[int(i)] for i in target[:, 0]]
+        label = [self.dataset.classes[int(i)] for i in target[:, 4]]
 
         # 绘制边界框和标签
-        image = draw(image, target[:, 1:], label)
+        image = draw(image, target[:, :4], label)
         image.show()

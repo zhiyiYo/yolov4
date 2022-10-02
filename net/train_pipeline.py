@@ -2,17 +2,18 @@
 import time
 from pathlib import Path
 from datetime import datetime
+import numpy as np
 
 import torch
-from torch import optim, cuda
+from torch import cuda
 from torch.backends import cudnn
-from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 from utils.log_utils import LossLogger, Logger
 from utils.datetime_utils import time_delta
-from utils.lr_schedule_utils import WarmUpCosLR, determin_lr
+from utils.lr_schedule_utils import WarmUpCosLRSchedule, determin_lr, get_lr
+from utils.optimizer_utils import make_optimizer
 
-from .dataset import make_data_loader
+from .dataset import VOCDataset, make_data_loader
 from .loss import YoloLoss
 from .yolo import Yolo
 
@@ -24,7 +25,7 @@ def exception_handler(train_func):
             return train_func(train_pipeline, *args, **kwargs)
         except BaseException as e:
             if not isinstance(e, KeyboardInterrupt):
-                Logger("error").error(f"{e.__class__.__name__}: {e}")
+                Logger("error").error(f"{e.__class__.__name__}: {e}", True)
 
             train_pipeline.save()
 
@@ -39,10 +40,10 @@ def exception_handler(train_func):
 class TrainPipeline:
     """ 训练模型流水线 """
 
-    def __init__(self, n_classes: int, image_size: int, anchors: list, dataset: Dataset, darknet_path: str = None,
-                 yolo_path: str = None, lr=0.01, momentum=0.9, weight_decay=4e-5, freeze=True, batch_size=4,
-                 freeze_batch_size=8, num_workers=4, freeze_epoch=20, start_epoch=0, max_epoch=60, save_frequency=5,
-                 use_gpu=True, save_dir='model', log_file: str = None, log_dir='log'):
+    def __init__(self, n_classes: int, image_size: int, anchors: list, dataset: VOCDataset, darknet_path: str = None,
+                 yolo_path: str = None, lr=0.01, momentum=0.9, weight_decay=4e-5, warm_up_ratio=0.02, freeze=True,
+                 batch_size=4, freeze_batch_size=8, num_workers=4, freeze_epoch=20, start_epoch=0, max_epoch=60,
+                 save_frequency=5, use_gpu=True, save_dir='model', log_file: str = None, log_dir='log'):
         """
         Parameters
         ----------
@@ -75,8 +76,8 @@ class TrainPipeline:
         weight_decay: float
             权重衰减
 
-        lr_step_size: int
-            学习率退火的步长
+        warm_up_ratio: float
+            暖启动的世代占全部世代的比例
 
         freeze: bool
             是否使用冻结训练
@@ -145,28 +146,24 @@ class TrainPipeline:
         else:
             raise ValueError("必须指定预训练的 Darknet53 模型文件路径")
 
-        self.model.backbone.self_freezed(freeze)
+        self.model.backbone.set_freezed(freeze)
 
         # 创建优化器和损失函数
         bs = freeze_batch_size if freeze else batch_size
         lr_fit, lr_min_fit = determin_lr(lr, bs)
         self.criterion = YoloLoss(anchors, n_classes, image_size)
-        self.optimizer = optim.SGD(
-            self.model.parameters(),
-            lr=lr_fit,
-            momentum=momentum,
-            weight_decay=weight_decay
-        )
-        self.lr_schedule = WarmUpCosLR(
-            self.optimizer, lr_fit, lr_min_fit, max_epoch)
+        self.optimizer = make_optimizer(
+            self.model, lr_fit, momentum, weight_decay)
+        self.lr_schedule = WarmUpCosLRSchedule(
+            self.optimizer, lr_fit, lr_min_fit, max_epoch, warm_up_ratio)
 
         # 数据集加载器
         self.num_worksers = num_workers
+        self.n_batches = len(self.dataset)//bs
         self.data_loader = make_data_loader(self.dataset, bs, num_workers)
 
         # 训练损失记录器
-        self.n_batches = len(self.dataset)//bs
-        self.logger = LossLogger(self.n_batches, log_file, log_dir)
+        self.logger = LossLogger(log_file, log_dir)
 
     def save(self):
         """ 保存模型和训练损失数据 """
@@ -190,8 +187,6 @@ class TrainPipeline:
         self.save_dir = self.save_dir/t
         self.logger.save_dir = self.logger.save_dir/t
 
-        # 数据迭代器
-
         bar_format = '{desc}{n_fmt:>4s}/{total_fmt:<4s}|{bar}|{postfix}'
         print('🚀 开始训练！')
 
@@ -200,47 +195,57 @@ class TrainPipeline:
             self.current_epoch = e
 
             # 解冻训练
-            if self.freeze and e > self.free_epoch and not is_unfreezed:
+            if self.freeze and e >= self.free_epoch and not is_unfreezed:
+                print('\n🧊 开始解冻训练！\n')
                 is_unfreezed = True
                 self.lr_schedule.set_lr(*determin_lr(self.lr, self.batch_size))
                 self.data_loader = make_data_loader(
                     self.dataset, self.batch_size, self.num_worksers)
-                self.logger.frequency = len(self.dataset)//self.batch_size
-                self.model.backbone.self_freezed(False)
+                self.n_batches = len(self.dataset)//self.batch_size
+                self.model.backbone.set_freezed(False)
 
             self.model.train()
 
             # 创建进度条
             self.pbar = tqdm(total=self.n_batches, bar_format=bar_format)
-            self.pbar.set_description(f"\33[36m💫 Epoch {(e+1):5d}")
+            self.pbar.set_description(f"\33[36m💫 Epoch {(e+1):5d}/{self.max_epoch}")
             start_time = datetime.now()
 
-            for images, targets in self.data_loader:
+            loss_value = 0
+            for iter, (images, targets) in enumerate(self.data_loader, 1):
                 # 预测边界框、置信度和条件类别概率
                 preds = self.model(images.to(self.device))
 
                 # 误差反向传播
                 self.optimizer.zero_grad()
-                loc_loss, conf_loss, cls_loss = self.criterion(preds, targets)
-                loss = loc_loss + conf_loss + cls_loss
+                loss = 0
+                for i, pred in enumerate(preds):
+                    loss += self.criterion(i, pred, targets)
+
                 loss.backward()
                 self.optimizer.step()
 
                 # 记录误差
-                self.logger.update(
-                    loc_loss.item(), conf_loss.item(), cls_loss.item())
+                loss_value += loss.item()
 
                 # 更新进度条
                 cost_time = time_delta(start_time)
                 self.pbar.set_postfix_str(
-                    f'loss: {loss.item():.5f}, loc_loss: {loc_loss.item():.5f}, conf_loss: {conf_loss.item():.5f}, cls_loss: {cls_loss.item():.5f}, 执行时间: {cost_time}\33[0m')
+                    f'loss: {loss_value/iter:.4f}, lr: {get_lr(self.optimizer):.5f}, time: {cost_time}\33[0m')
                 self.pbar.update()
+
+            # 将误差写入日志
+            self.logger.record(loss_value/iter)
 
             # 关闭进度条
             self.pbar.close()
 
             # 学习率退火
             self.lr_schedule.step(e)
+
+            # 关闭马赛克数据增强
+            if e == self.max_epoch - self.lr_schedule.no_aug_epoch:
+                self.dataset.use_mosaic = False
 
             # 定期保存模型
             if e > self.start_epoch and (e+1-self.start_epoch) % self.save_frequency == 0:
