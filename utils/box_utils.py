@@ -36,9 +36,9 @@ def iou(bbox1: Tensor, bbox2: Tensor):
     # 将先验框和边界框真值的 xmax、ymax 以及 xmin、ymin进行广播使得维度一致，(A, B, 2)
     # 再计算 xmax 和 ymin 较小者、xmin 和 ymin 较大者，W=xmax较小-xmin较大，H=ymax较小-ymin较大
     xy_max = torch.min(bbox1[:, 2:].unsqueeze(1).expand(A, B, 2),
-                       bbox2[:, 2:].broadcast_to(A, B, 2))
+                       bbox2[:, 2:].unsqueeze(0).expand(A, B, 2))
     xy_min = torch.max(bbox1[:, :2].unsqueeze(1).expand(A, B, 2),
-                       bbox2[:, :2].broadcast_to(A, B, 2))
+                       bbox2[:, :2].unsqueeze(0).expand(A, B, 2))
 
     # 计算交集面积
     inter = (xy_max-xy_min).clamp(min=0)
@@ -48,7 +48,7 @@ def iou(bbox1: Tensor, bbox2: Tensor):
     area_prior = ((bbox1[:, 2]-bbox1[:, 0]) *
                   (bbox1[:, 3]-bbox1[:, 1])).unsqueeze(1).expand(A, B)
     area_bbox = ((bbox2[:, 2]-bbox2[:, 0]) *
-                 (bbox2[:, 3]-bbox2[:, 1])).broadcast_to(A, B)
+                 (bbox2[:, 3]-bbox2[:, 1])).unsqueeze(0).expand(A, B)
 
     return inter/(area_prior+area_bbox-inter)
 
