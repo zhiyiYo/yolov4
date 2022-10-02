@@ -15,35 +15,14 @@ def plot_loss(log_file: str):
     log_file: str
         损失日志文件路径
     """
-    logger = LossLogger(None, log_file)
-    epoch = np.arange(0, len(logger.losses))+1
+    logger = LossLogger(log_file)
+    epoch = np.arange(1, len(logger.losses)+1)
 
-    fig = plt.figure(num='损失曲线', tight_layout=True)
-    gs = fig.add_gridspec(2, 3)
+    fig, ax = plt.subplots(1, 1, num='损失曲线')
+    ax.plot(epoch, logger.losses)
+    ax.set(xlabel='epoch', title='Total Loss', ylabel="loss")
 
-    # 总损失
-    ax1 = fig.add_subplot(gs[0, :])  # type:plt.Axes
-    ax1.plot(epoch, logger.losses)
-    ax1.set(xlabel='epoch', title='Total Loss')
-
-    # 定位损失
-    ax2 = fig.add_subplot(gs[1, 0])  # type:plt.Axes
-    ax2.plot(epoch, logger.loc_losses)
-    ax2.set(xlabel='epoch', title='Location Loss')
-
-    # 置信度损失
-    ax3 = fig.add_subplot(gs[1, 1])  # type:plt.Axes
-    ax3.plot(epoch, logger.conf_losses)
-    ax3.set(xlabel='epoch', title='Confidence Loss')
-
-    # 分类损失
-    ax4 = fig.add_subplot(gs[1, 2])  # type:plt.Axes
-    ax4.plot(epoch, logger.cls_losses)
-    ax4.set(xlabel='epoch', title='Classification Loss')
-
-    axes = [ax1, ax2, ax3, ax4]
-
-    return fig, axes
+    return fig, ax
 
 
 def plot_PR(file_path: str, class_name: str):
