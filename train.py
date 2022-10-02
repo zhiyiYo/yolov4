@@ -12,7 +12,6 @@ config = {
         [[36, 75], [76, 55], [72, 146]],
         [[12, 16], [19, 36], [40, 28]],
     ],
-    "yolo_path": "model/2022-10-02_16-24-51/Yolo_10.pth",
     "darknet_path": "model/CSPdarknet53.pth",
     "lr": 1e-2,
     "batch_size": 4,
@@ -20,7 +19,7 @@ config = {
     "freeze": True,
     "freeze_epoch": 30,
     "max_epoch": 100,
-    "start_epoch": 10,
+    "start_epoch": 0,
     "num_workers": 4
 }
 

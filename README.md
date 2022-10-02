@@ -20,9 +20,24 @@ An implementation of yolov4 using pytorch.
     * http://host.robots.ox.ac.uk/pascal/VOC/voc2007/VOCtrainval_06-Nov-2007.tar
     * http://host.robots.ox.ac.uk/pascal/VOC/voc2007/VOCtest_06-Nov-2007.tarnload.py
 
-2. Download pre-trained `CSPDarknet53.pth` model from [Google Drive](https://drive.google.com/file/d/1ig5-fAfT2z3EBXEDlUsSJVxKPJRTftm7/view?usp=sharing).
+2. Download pre-trained `CSPDarknet53.pth` model from [Google Drive](https://drive.google.com/file/d/12oV8QL937S1JWFQhzLNPoqyYc_bi0lWT/view?usp=sharing).
 
-3. Modify `config` in `train.py` and start training:
+
+3. Modify the value of `root` in `train.py`, please ensure that the directory structure of the `root` folder is as follows:
+
+    ```txt
+    root
+    ├───Annotations
+    ├───ImageSets
+    │   ├───Layout
+    │   ├───Main
+    │   └───Segmentation
+    ├───JPEGImages
+    ├───SegmentationClass
+    └───SegmentationObject
+    ```
+
+4. start training:
 
     ```shell
     conda activate yolov4
@@ -30,12 +45,22 @@ An implementation of yolov4 using pytorch.
     ```
 
 ## Evaluation
-1. Modify the `model_path` in `eval.py`.
+### one model
+1. Modify the value of `root` and `model_path` in `eval.py`.
 2. Calculate mAP:
+
+    ```sh
+    conda activate yolov4
+    python eval.py
+    ```
+
+### multi models
+1. Modify the value of `root` and `model_dir` in `evals.py`.
+2. Calculate and plot mAP:
 
     ```shell
     conda activate yolov4
-    python eval.py
+    python evals.py
     ```
 
 
@@ -48,12 +73,6 @@ An implementation of yolov4 using pytorch.
     conda activate yolov4
     python demo.py
     ```
-
-
-## Notes
-1. Sometimes the data set downloaded through `download.py`' may be incomplete, so please check whether the number of pictures in the data set is correct after downloading, or you can download the data set directly through the browser in the following addresses:
-   * http://host.robots.ox.ac.uk/pascal/VOC/voc2007/VOCtrainval_06-Nov-2007.tar
-   * http://host.robots.ox.ac.uk/pascal/VOC/voc2007/VOCtest_06-Nov-2007.tar
 
 
 ## Reference
