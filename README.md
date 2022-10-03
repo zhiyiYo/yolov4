@@ -63,6 +63,39 @@ An implementation of yolov4 using pytorch.
     python evals.py
     ```
 
+### mAP curve
+I trained the model on VOC2012 dataset and the mAP curse is shown in the figure below:
+
+![mAP 曲线](resource/image/mAP_曲线.png)
+
+
+### best mAP
+```
++-------------+--------+--------+
+|    class    |   AP   |  mAP   |
++-------------+--------+--------+
+|  aeroplane  | 88.87% | 82.92% |
+|   bicycle   | 90.69% |        |
+|     bird    | 85.72% |        |
+|     boat    | 66.17% |        |
+|    bottle   | 71.61% |        |
+|     bus     | 89.98% |        |
+|     car     | 92.20% |        |
+|     cat     | 91.61% |        |
+|    chair    | 66.64% |        |
+|     cow     | 91.90% |        |
+| diningtable | 80.29% |        |
+|     dog     | 89.20% |        |
+|    horse    | 90.04% |        |
+|  motorbike  | 88.59% |        |
+|    person   | 88.20% |        |
+| pottedplant | 51.06% |        |
+|    sheep    | 86.86% |        |
+|     sofa    | 75.07% |        |
+|    train    | 89.05% |        |
+|  tvmonitor  | 84.70% |        |
++-------------+--------+--------+
+```
 
 ## Detection
 1. Modify the `model_path` and `image_path` in `demo.py`.
@@ -79,6 +112,22 @@ An implementation of yolov4 using pytorch.
 * [[Paper] YOLOv4: Optimal Speed and Accuracy of Object Detection](https://arxiv.org/abs/2004.10934)
 * [[GitHub] bubbliiiing / yolov4-pytorch](https://github.com/bubbliiiing/yolov4-pytorch)
 
+
+## Notes
+1. 82.92% mAP may not be the limit of this project. You can try to train the model on the VOC2007 + VOC2012 dataset. The mAP should be higher. If you get a better result, please don't hesitate to tell me.
+2. If you want to train custom dataset, here are some steps to follow:
+   1. The label file must be in the same XML format as VOC2007, and the structure of dataset must be the same as follows:
+
+        ```txt
+        root
+        ├───Annotations
+        ├───ImageSets
+        │   └───Main
+        └───JPEGImages
+        ```
+   2. Put your `test.txt` and `train.txt` in the `Main` folder. These txt files must contain the names of the corresponding **jpg** format pictures. These names do not need a suffix.
+   3. Modify the `classes` property of `VOCDataset` in `net/dataset.py` to include all the classes in your dataset.
+   4. Change the `root` and `image_set` of `VOCDataset` in `train.py` and start training.
 
 ## License
 ```txt
