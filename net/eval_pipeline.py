@@ -71,18 +71,10 @@ class EvalPipeline:
         """ 测试模型，获取 mAP """
         self._predict()
         self._get_ground_truth()
-        self._get_mAP()
+        return self._get_mAP()
 
     def _predict(self):
         """ 预测每一种类存在于哪些图片中 """
-        suffix = f'_conf{self.conf_thresh}_iou{self.overlap_thresh}_pred.json'
-        p = self.save_dir/(self.model_path.stem + suffix)
-        if p.exists():
-            print(f'🛸 从 {p} 中取得预测数据')
-            with open(p, encoding='utf-8') as f:
-                self.preds = json.load(f)
-                return
-
         self.preds = {c: {} for c in self.dataset.classes}
         transformer = ToTensor(self.image_size)
 
@@ -118,11 +110,6 @@ class EvalPipeline:
                     "bbox": bbox.tolist(),
                     "conf": conf.tolist()
                 }
-
-        # 保存预测数据
-        self.save_dir.mkdir(exist_ok=True, parents=True)
-        with open(p, 'w', encoding='utf-8') as f:
-            json.dump(self.preds, f)
 
     def _get_ground_truth(self):
         """ 获取 ground truth 中每一种类存在于哪些图片中 """
@@ -186,6 +173,8 @@ class EvalPipeline:
         p = self.save_dir / (self.model_path.stem + '_AP.json')
         with open(p, 'w', encoding='utf-8') as f:
             json.dump(result, f)
+
+        return mAP
 
     def _get_AP(self, c: str):
         """ 计算一个类的 AP
